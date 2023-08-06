@@ -4,6 +4,7 @@ namespace WPGraphQL\Extensions\OffsetPagination;
 
 use WPGraphQL\Data\Connection\AbstractConnectionResolver;
 use WPGraphQL\Data\Connection\UserConnectionResolver;
+use WPGraphQL\Data\Connection\TermObjectConnectionResolver;
 
 class Loader
 {
@@ -101,6 +102,9 @@ class Loader
         if ($resolver instanceof UserConnectionResolver) {
             // Enable slow total counting for user connections
             $query_args['count_total'] = true;
+        } elseif($resolver instanceof TermObjectConnectionResolver) {
+            // There's no option to calc the terms count in WordPress, so will calc it in separate query later.
+            $query_args['op_count_total'] = true;
         } else {
             // Enable slow total counting for posts connections
             $query_args['no_found_rows'] = false;
@@ -124,8 +128,13 @@ class Loader
         $page_info,
         AbstractConnectionResolver $resolver
     ) {
+        // Change the query property to be public to can access it directly to prevent re-query(re-run sql) it.
+        $reflector = new \ReflectionObject($resolver);
+        $query_property = $reflector->getProperty('query');
+        $query_property->setAccessible(true);
+        $query = $query_property->getValue($resolver);
+
         $size = self::get_page_size($resolver);
-        $query = $resolver->get_query();
         $args = $resolver->getArgs();
         $offset = $args['where']['offsetPagination']['offset'] ?? 0;
 
@@ -135,6 +144,11 @@ class Loader
             $total = $query->found_posts;
         } elseif ($query instanceof \WP_User_Query) {
             $total = $query->total_users;
+        } elseif (
+            $query instanceof \WP_Term_Query
+            && !empty($query->query_vars['op_count_total'])
+        ) {
+            $total = wp_count_terms($query->query_vars);
         }
 
         $page_info['offsetPagination'] = [
